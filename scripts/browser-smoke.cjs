@@ -1,11 +1,13 @@
 const path = require('node:path');
 const http = require('node:http');
+const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { chromium } = require('playwright-core');
 
 const projectRoot = path.resolve(__dirname, '..');
 const binary = process.env.ATLAS_ELECTRON_BINARY || path.join(projectRoot, 'dist', 'linux-unpacked', 'atlas-desk');
 const port = Number(process.env.ATLAS_BROWSER_SMOKE_PORT || 9344);
+fs.mkdirSync(path.join(projectRoot, 'artifacts', 'screenshots'), { recursive: true });
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -119,6 +121,19 @@ async function main() {
     await page.waitForFunction((count) => document.querySelectorAll('.browser-tab').length === count + 1, tabsBeforePopup);
     const popupState = await waitForWebview(page, (state) => state.url === 'http://127.0.0.1:4313/popup' && !state.loading);
 
+    const orderBefore = await page.locator('.browser-tab').evaluateAll((tabs) => tabs.map((tab) => tab.dataset.tabId));
+    await page.locator('.browser-tab').first().dragTo(page.locator('.browser-tab').last());
+    await page.waitForTimeout(350);
+    const orderAfter = await page.locator('.browser-tab').evaluateAll((tabs) => tabs.map((tab) => tab.dataset.tabId));
+    if (orderAfter.at(-1) !== orderBefore[0]) throw new Error(`Electron tab drag failed: ${JSON.stringify({ orderBefore, orderAfter })}`);
+
+    await page.locator('.browser-tab.active').click({ button: 'right' });
+    await page.getByRole('button', { name: 'Add tab to new group' }).click();
+    await page.getByLabel('Tab group name').fill('Shopping');
+    await page.keyboard.press('Escape');
+    await page.locator('.tab-group-label').waitFor({ state: 'visible' });
+    await page.screenshot({ path: path.join(projectRoot, 'artifacts', 'screenshots', 'electron-browser.png') });
+
     console.log(JSON.stringify({
       google_url: backState.url,
       google_title: webState.title,
@@ -129,7 +144,10 @@ async function main() {
       sidebar_page_chat: true,
       sidebar_closed: true,
       popup_tab: popupState.title,
-      tab_identity: Boolean(firstTabId)
+      tab_identity: Boolean(firstTabId),
+      tab_dragging: true,
+      tab_grouping: await page.locator('.tab-group-label').count() === 1,
+      screenshot: 'artifacts/screenshots/electron-browser.png'
     }));
   } catch (error) {
     if (childOutput.trim()) console.error(childOutput.trim());

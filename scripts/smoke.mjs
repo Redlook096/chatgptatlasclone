@@ -1,4 +1,7 @@
 import { chromium } from 'playwright-core';
+import { mkdirSync } from 'node:fs';
+
+mkdirSync('artifacts/screenshots', { recursive: true });
 
 const browser = await chromium.launch({
   executablePath: process.env.ATLAS_CHROMIUM_PATH || '/usr/bin/chromium',
@@ -9,6 +12,7 @@ const browser = await chromium.launch({
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.addInitScript(() => {
+    window.__atlasProgressListeners = [];
     Object.defineProperty(window, 'atlas', {
       value: {
         window: { minimize: async () => {}, toggleMaximize: async () => {}, close: async () => {} },
@@ -19,7 +23,10 @@ try {
         browser: {
           runAgentTask: async () => ({ state: 'complete' }),
           stopAgentTask: async () => true,
-          onAgentProgress: () => () => {},
+          onAgentProgress: (listener) => {
+            window.__atlasProgressListeners.push(listener);
+            return () => { window.__atlasProgressListeners = window.__atlasProgressListeners.filter((item) => item !== listener); };
+          },
           onTextSelected: () => () => {},
           onOpenTab: () => () => {}
         },
@@ -64,24 +71,64 @@ try {
 
   await page.locator('.add-tab').click();
   await page.waitForFunction(() => document.querySelectorAll('.browser-tab').length === 3);
+  const dragOrderBefore = await page.locator('.browser-tab').evaluateAll((tabs) => tabs.map((tab) => tab.dataset.tabId));
+  await page.locator('.browser-tab').first().dragTo(page.locator('.browser-tab').last());
+  await page.waitForTimeout(350);
+  const dragOrderAfter = await page.locator('.browser-tab').evaluateAll((tabs) => tabs.map((tab) => tab.dataset.tabId));
+  if (dragOrderAfter.at(-1) !== dragOrderBefore[0]) throw new Error(`Tab drag did not reorder tabs: ${JSON.stringify({ dragOrderBefore, dragOrderAfter })}`);
+
+  await page.locator('.browser-tab.active').click({ button: 'right' });
+  await page.getByRole('button', { name: 'Add tab to new group' }).click();
+  await page.locator('.tab-group-label').waitFor({ state: 'visible' });
+  await page.getByLabel('Tab group name').fill('Research');
+  await page.keyboard.press('Escape');
+  await page.locator('.browser-tab').first().click({ button: 'right' });
+  await page.getByRole('button', { name: 'Add to Research' }).click();
+  if (await page.locator('.browser-tab.grouped').count() !== 2) throw new Error('Existing tab group did not accept a second tab.');
+  await page.locator('.tab-group-label').click();
+  await page.locator('.tab-group-label.collapsed').waitFor({ state: 'visible' });
+  await page.locator('.tab-group-label').click();
+  await page.getByText('Research', { exact: true }).waitFor({ state: 'visible' });
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: 'artifacts/screenshots/tabs-and-groups.png', fullPage: true });
+
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
   await page.locator('.agent-toggle.active').waitFor({ state: 'visible' });
+  const agentModeEnabled = true;
   await page.locator('.browser-tab.active .tab-x').click();
   await page.waitForFunction(() => document.querySelectorAll('.browser-tab').length === 2);
   await page.locator('.add-tab').click();
   await page.waitForFunction(() => document.querySelectorAll('.browser-tab').length === 3);
   await page.waitForTimeout(400);
-  await page.screenshot({ path: 'preview.png', fullPage: true });
+  await page.screenshot({ path: 'artifacts/screenshots/welcome.png', fullPage: true });
+
+  await page.locator('.browser-tab').filter({ hasText: 'OpenAI ChatGPT Atlas' }).click();
+  await page.getByRole('button', { name: 'Ask ChatGPT' }).click();
+  await page.evaluate(() => {
+    for (const listener of window.__atlasProgressListeners) listener({ state: 'acting', step: 2, action: 'click', message: 'Opening the best result', cursor: { x: 520, y: 285 } });
+  });
+  await page.locator('.agent-live-cursor').waitFor({ state: 'visible' });
+  const agentFieldAnimation = await page.locator('.agent-blue-field').evaluate((element) => getComputedStyle(element).animationName);
+  const cursorTransition = await page.locator('.agent-live-cursor').evaluate((element) => getComputedStyle(element).transitionDuration);
+  if (agentFieldAnimation !== 'agent-field-breathe' || !cursorTransition.includes('0.52s')) {
+    throw new Error(`Agent motion styling is missing: ${JSON.stringify({ agentFieldAnimation, cursorTransition })}`);
+  }
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: 'artifacts/screenshots/agent-in-use.png', fullPage: true });
   console.log(JSON.stringify({
     title: await page.title(),
     tabs: await page.locator('.browser-tab').count(),
-    agent_mode: await page.locator('.agent-toggle.active').count() === 1,
+    agent_mode: agentModeEnabled,
     fallback_settings: true,
     chat_reply: true,
     google_search: true,
+    tab_dragging: true,
+    tab_grouping: true,
+    agent_cursor: true,
+    blue_agent_field: agentFieldAnimation,
     sidebar_motion: sidebarAnimation,
     tab_radius: activeTabStyle.radius,
-    screenshot: 'preview.png'
+    screenshots: ['artifacts/screenshots/welcome.png', 'artifacts/screenshots/tabs-and-groups.png', 'artifacts/screenshots/agent-in-use.png']
   }));
 } finally {
   await browser.close();

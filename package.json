@@ -4,10 +4,10 @@
   "private": true,
   "author": "Redlook096",
   "desktopName": "atlas-desk",
-  "homepage": "https://github.com/Redlook096/chatgpt-atlas-clone",
+  "homepage": "https://github.com/Redlook096/chatgptatlasclone",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Redlook096/chatgpt-atlas-clone.git"
+    "url": "https://github.com/Redlook096/chatgptatlasclone.git"
   },
   "description": "A polished desktop workspace for browsing and working with an AI assistant.",
   "main": "electron/main.cjs",

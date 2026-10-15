@@ -21,6 +21,7 @@ import {
   LockKeyhole,
   Menu,
   Mic,
+  MousePointer2,
   MoreHorizontal,
   PanelLeft,
   Plus,
@@ -35,6 +36,8 @@ import {
   WandSparkles,
   X
 } from 'lucide-react';
+
+const groupColours = ['#5b8def', '#a66de8', '#2fa87c', '#e48b3c', '#dc5f72'];
 
 const homeSuggestions = [
   { icon: '🧠', label: 'Find holiday recipes', detail: 'Can you suggest some gluten-free recipes for the holidays' },
@@ -100,10 +103,16 @@ function App() {
   const [selectionPrompt, setSelectionPrompt] = useState('Make this sound more professional');
   const [llmStatus, setLlmStatus] = useState({ configured: false, mode: 'scripted', model: 'Built-in scripted fallback', baseUrl: '' });
   const [toast, setToast] = useState('');
+  const [tabGroups, setTabGroups] = useState([]);
+  const [tabMenu, setTabMenu] = useState(null);
+  const [groupMenu, setGroupMenu] = useState(null);
+  const [tabDrag, setTabDrag] = useState(null);
+  const [agentCursor, setAgentCursor] = useState(null);
   const webviewRefs = useRef(new Map());
   const homeInputRef = useRef(null);
   const sideInputRef = useRef(null);
   const sideCloseTimerRef = useRef(null);
+  const tabDragRef = useRef(null);
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) || tabs[0],
@@ -122,6 +131,7 @@ function App() {
     window.atlas?.assistant?.status?.().then(setLlmStatus).catch(() => {});
     const removeProgress = window.atlas?.browser?.onAgentProgress?.((progress) => {
       setAgentStatus(progress.message || '');
+      if (progress.cursor) setAgentCursor(progress.cursor);
       if (progress.scripted || progress.fallback_reason) {
         setLlmStatus((current) => ({ ...current, mode: 'scripted', fallbackReason: progress.fallback_reason || current.fallbackReason }));
       }
@@ -129,6 +139,9 @@ function App() {
         setAgentActivity((current) => [...current, progress].slice(-12));
       }
       setAgentRunning(!['complete', 'stopped', 'error'].includes(progress.state));
+      if (['complete', 'stopped', 'error'].includes(progress.state)) {
+        window.setTimeout(() => setAgentCursor(null), 700);
+      }
       if (progress.state === 'error') notify(progress.message);
     });
     const removeSelection = window.atlas?.browser?.onTextSelected?.((selection) => {
@@ -145,6 +158,17 @@ function App() {
   }, []);
 
   useEffect(() => () => window.clearTimeout(sideCloseTimerRef.current), []);
+
+  useEffect(() => {
+    function closeMenus(event) {
+      if (!event.target.closest('.tab-menu, .group-menu')) {
+        setTabMenu(null);
+        setGroupMenu(null);
+      }
+    }
+    window.addEventListener('pointerdown', closeMenus);
+    return () => window.removeEventListener('pointerdown', closeMenus);
+  }, []);
 
   useEffect(() => {
     function handleShortcut(event) {
@@ -165,6 +189,8 @@ function App() {
         setProfileOpen(false);
         setMemoryOpen(false);
         setSettingsOpen(false);
+        setTabMenu(null);
+        setGroupMenu(null);
         setSelectedText('');
         if (sideChatOpen) closeSideChat();
       }
@@ -277,12 +303,74 @@ function App() {
     animateState(() => {
       setTabs(nextTabs);
       setActiveTabId(nextActiveId);
+      setTabGroups((current) => current.filter((group) => nextTabs.some((tab) => tab.groupId === group.id)));
     });
   }
 
   function switchTab(id) {
     if (id === activeTabId) return;
     animateState(() => setActiveTabId(id));
+  }
+
+  function endTabDrag() {
+    const drag = tabDragRef.current;
+    tabDragRef.current = null;
+    setTabDrag(null);
+    if (!drag?.moved) return;
+    const sourceIndex = tabs.findIndex((tab) => tab.id === drag.id);
+    const targetIndex = tabs.findIndex((tab) => tab.id === drag.targetId);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    animateState(() => setTabs((current) => {
+      const next = [...current];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    }));
+  }
+
+  function beginNativeTabDrag(event, tabId) {
+    window.getSelection()?.removeAllRanges();
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', tabId);
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.dataTransfer.setDragImage(event.currentTarget, Math.min(event.clientX - rect.left, rect.width), rect.height / 2);
+    tabDragRef.current = { id: tabId, startX: event.clientX, targetId: tabId, moved: true };
+    setTabDrag({ id: tabId, targetId: tabId, offset: 0 });
+  }
+
+  function enterNativeTabTarget(event, tabId) {
+    event.preventDefault();
+    if (!tabDragRef.current || tabDragRef.current.id === tabId) return;
+    tabDragRef.current.targetId = tabId;
+    setTabDrag((current) => current ? { ...current, targetId: tabId } : current);
+  }
+
+  function createTabGroup(tabId) {
+    const group = {
+      id: `group-${Date.now()}`,
+      name: `Group ${tabGroups.length + 1}`,
+      colour: groupColours[tabGroups.length % groupColours.length],
+      collapsed: false
+    };
+    animateState(() => {
+      setTabGroups((current) => [...current, group]);
+      setTabs((current) => current.map((tab) => tab.id === tabId ? { ...tab, groupId: group.id } : tab));
+    });
+    setTabMenu(null);
+    setGroupMenu(group.id);
+  }
+
+  function setTabGroup(tabId, groupId) {
+    animateState(() => setTabs((current) => current.map((tab) => tab.id === tabId ? { ...tab, groupId } : tab)));
+    setTabMenu(null);
+  }
+
+  function updateGroup(groupId, patch) {
+    setTabGroups((current) => current.map((group) => group.id === groupId ? { ...group, ...patch } : group));
+  }
+
+  function toggleGroup(groupId) {
+    animateState(() => setTabGroups((current) => current.map((group) => group.id === groupId ? { ...group, collapsed: !group.collapsed } : group)));
   }
 
   function openUrl(url, title = shortHost(url), inNewTab = false) {
@@ -389,6 +477,7 @@ function App() {
     setAgentMode(true);
     openSideChat();
     setAgentRunning(true);
+    setAgentCursor({ x: 80, y: 90 });
     setAgentStatus('Connecting Playwright to this tab…');
     await window.atlas?.browser?.runAgentTask?.({ goal: goal.trim(), preferredUrl });
   }
@@ -396,6 +485,7 @@ function App() {
   function stopAgent() {
     window.atlas?.browser?.stopAgentTask?.();
     setAgentRunning(false);
+    setAgentCursor(null);
     setAgentStatus('You have control.');
   }
 
@@ -416,6 +506,7 @@ function App() {
   }
 
   const showAskButton = activeTab.kind === 'web' && !sideChatOpen;
+  const groupById = new Map(tabGroups.map((group) => [group.id, group]));
 
   return (
     <div className="atlas-app">
@@ -426,14 +517,21 @@ function App() {
           <button className="traffic yellow" aria-label="Minimize" onClick={() => window.atlas?.window.minimize()} />
           <button className="traffic green" aria-label="Maximize" onClick={() => window.atlas?.window.toggleMaximize()} />
         </div>
-        <div className="tabs-row">
-          {tabs.map((tab) => (
-            <button key={tab.id} style={{ viewTransitionName: `atlas-${tab.id.replace(/[^a-z0-9-]/gi, '-')}` }} className={`browser-tab ${tab.id === activeTabId ? 'active' : ''}`} onClick={() => switchTab(tab.id)}>
+        <div className={`tabs-row ${tabDrag ? 'drag-active' : ''}`}>
+          {tabs.map((tab, index) => {
+            const group = groupById.get(tab.groupId);
+            const priorTab = tabs[index - 1];
+            const startsGroup = group && priorTab?.groupId !== group.id;
+            const hidden = group?.collapsed && tab.id !== activeTabId;
+            return <div key={tab.id} className={`tab-slot ${hidden ? 'group-collapsed-tab' : ''}`}>
+              {startsGroup && <button className={`tab-group-label ${group.collapsed ? 'collapsed' : ''}`} style={{ '--group-colour': group.colour }} onClick={() => toggleGroup(group.id)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setGroupMenu(group.id); }} aria-label={`${group.name} tab group`}><span />{!group.collapsed && <strong>{group.name}</strong>}</button>}
+            <button draggable="true" data-tab-id={tab.id} title={tab.title} style={{ viewTransitionName: `atlas-${tab.id.replace(/[^a-z0-9-]/gi, '-')}`, '--drag-x': tabDrag?.id === tab.id ? `${tabDrag.offset}px` : '0px', '--group-colour': group?.colour || 'transparent' }} className={`browser-tab ${tab.id === activeTabId ? 'active' : ''} ${group ? 'grouped' : ''} ${tabDrag?.id === tab.id ? 'dragging' : ''} ${tabDrag?.targetId === tab.id && tabDrag.id !== tab.id ? 'drop-target' : ''}`} onDragStart={(event) => beginNativeTabDrag(event, tab.id)} onDragEnter={(event) => enterNativeTabTarget(event, tab.id)} onDragOver={(event) => event.preventDefault()} onDragEnd={endTabDrag} onContextMenu={(event) => { event.preventDefault(); setTabMenu({ tabId: tab.id, x: Math.min(event.clientX, window.innerWidth - 220) }); }} onClick={() => switchTab(tab.id)}>
               <span className="tab-icon">{tab.kind === 'new' ? <Aperture size={13} /> : tab.kind === 'chat' ? <Aperture size={13} /> : <Globe2 size={12} />}</span>
               <span>{tab.title}</span>
               <span className="tab-x" onClick={(event) => closeTab(tab.id, event)}><X size={12} /></span>
             </button>
-          ))}
+            </div>;
+          })}
           <button className="add-tab" onClick={() => addTab()} aria-label="New tab"><Plus size={17} /></button>
         </div>
         <button className="profile-button" onClick={() => setProfileOpen((value) => !value)}><User size={13} /></button>
@@ -444,6 +542,17 @@ function App() {
             <button onClick={() => { setSettingsOpen(true); setProfileOpen(false); }}><Settings size={15} /> Settings</button>
           </div>
         )}
+        {tabMenu && <div className="tab-menu" style={{ left: tabMenu.x }} onPointerDown={(event) => event.stopPropagation()}>
+          <button onClick={() => createTabGroup(tabMenu.tabId)}><span className="menu-colour new" /> Add tab to new group</button>
+          {tabGroups.map((group) => <button key={group.id} onClick={() => setTabGroup(tabMenu.tabId, group.id)}><span className="menu-colour" style={{ background: group.colour }} /> Add to {group.name}</button>)}
+          {tabs.find((tab) => tab.id === tabMenu.tabId)?.groupId && <button onClick={() => setTabGroup(tabMenu.tabId, undefined)}><X size={13} /> Remove from group</button>}
+          <hr />
+          <button onClick={(event) => { closeTab(tabMenu.tabId, event); setTabMenu(null); }}><X size={13} /> Close tab</button>
+        </div>}
+        {groupMenu && (() => { const group = groupById.get(groupMenu); return group && <div className="group-menu" onPointerDown={(event) => event.stopPropagation()}>
+          <input value={group.name} aria-label="Tab group name" onChange={(event) => updateGroup(group.id, { name: event.target.value })} />
+          <div>{groupColours.map((colour) => <button key={colour} aria-label={`Use ${colour}`} className={group.colour === colour ? 'selected' : ''} style={{ background: colour }} onClick={() => updateGroup(group.id, { colour })} />)}</div>
+        </div>; })()}
       </header>
 
       <div className="nav-bar">
@@ -473,6 +582,9 @@ function App() {
               onQueryChange={setHomeQuery}
               onSubmit={submitUniversal}
               onToggleAgent={() => setAgentMode((value) => !value)}
+              memory={memory}
+              onBrowse={() => searchGoogle('Discover something new')}
+              onHistory={() => setMemoryOpen(true)}
             /></div>
           )}
           {activeTab.kind === 'chat' && <div className="page-view page-view-active"><FullChatPage tab={activeTab} input={chatInput} onInputChange={setChatInput} onSend={continueChat} /></div>}
@@ -481,12 +593,16 @@ function App() {
               <webview ref={(node) => registerWebview(tab.id, node)} src={tab.src || tab.url} partition="persist:atlas-browser" className="browser-webview" allowpopups="true" />
               {tab.id === activeTabId && loading && <div className="load-line" />}
               {tab.id === activeTabId && agentRunning && (
+                <>
+                <div className="agent-blue-field" aria-hidden="true"><div className="agent-blue-sweep" /></div>
+                <div className="agent-live-cursor" style={{ left: agentCursor?.x ?? '48%', top: agentCursor?.y ?? '42%' }} aria-label="ChatGPT browser cursor"><MousePointer2 size={24} fill="#111" /><span><Aperture size={12} /> ChatGPT</span></div>
                 <div className="agent-control-pill">
                   <span className="agent-site"><Globe2 size={13} /> {shortHost(tab.url)}</span>
                   <span className="agent-task">{agentStatus || 'Working on your task'}</span>
                   <button onClick={stopAgent}>Take control</button>
                   <button className="stop-agent" onClick={stopAgent}>Stop</button>
                 </div>
+                </>
               )}
             </div>
           ))}
@@ -529,7 +645,7 @@ function App() {
   );
 }
 
-function NewTabPage({ query, agentMode, inputRef, onQueryChange, onSubmit, onToggleAgent }) {
+function NewTabPage({ query, agentMode, inputRef, onQueryChange, onSubmit, onToggleAgent, memory, onBrowse, onHistory }) {
   return (
     <section className="new-tab-page">
       <button className="model-selector">ChatGPT 5 <ChevronDown size={15} /></button>
@@ -549,6 +665,13 @@ function NewTabPage({ query, agentMode, inputRef, onQueryChange, onSubmit, onTog
             </button>
           ))}
         </div>
+        <div className="welcome-divider"><span>Explore Atlas</span></div>
+        <div className="welcome-cards">
+          <button onClick={onBrowse}><span><Search size={16} /></span><strong>Browse with Google</strong><small>Search the live web in a full browser tab</small></button>
+          <button onClick={() => { if (!agentMode) onToggleAgent(); inputRef.current?.focus(); }}><span className="blue"><MousePointer2 size={16} /></span><strong>Let Agent take action</strong><small>Use Playwright to complete a task on the page</small></button>
+          <button onClick={onHistory}><span><Clock3 size={16} /></span><strong>Continue browsing</strong><small>{memory.length ? `${memory.length} saved page${memory.length === 1 ? '' : 's'} in history` : 'Your visited pages will appear here'}</small></button>
+        </div>
+        <div className="welcome-shortcuts"><span><kbd>Ctrl</kbd><kbd>L</kbd> Address</span><span><kbd>Ctrl</kbd><kbd>K</kbd> Ask ChatGPT</span><span><kbd>Ctrl</kbd><kbd>T</kbd> New tab</span></div>
       </div>
     </section>
   );

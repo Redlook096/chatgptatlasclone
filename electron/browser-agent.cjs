@@ -115,7 +115,13 @@ async function snapshotPage(page) {
         type: element.getAttribute('type') || '',
         text: (element.innerText || element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('title') || '').trim().slice(0, 180),
         value: 'value' in element ? String(element.value || '').slice(0, 120) : '',
-        href: element instanceof HTMLAnchorElement ? element.href.slice(0, 240) : ''
+        href: element instanceof HTMLAnchorElement ? element.href.slice(0, 240) : '',
+        rect: {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        }
       });
       index += 1;
       if (result.length >= 80) break;
@@ -174,6 +180,11 @@ async function runBrowserAgent({ goal, preferredUrl, port, onProgress, shouldSto
     onProgress({ state: 'thinking', step, message: `Reading ${snapshot.title || snapshot.url}` });
     const action = await callAgentModel(goal.trim(), step, snapshot, activity);
     usedScriptedFallback ||= Boolean(action.scripted);
+    const targetElement = snapshot.interactive.find((element) => element.index === Number(action.target));
+    const cursor = targetElement?.rect ? {
+      x: Math.round(targetElement.rect.x + targetElement.rect.width / 2),
+      y: Math.round(targetElement.rect.y + targetElement.rect.height / 2)
+    } : undefined;
     const record = {
       step,
       action: action.action,
@@ -182,7 +193,8 @@ async function runBrowserAgent({ goal, preferredUrl, port, onProgress, shouldSto
       scripted: Boolean(action.scripted),
       fallback_reason: action.fallback_reason || '',
       reason: action.reason || '',
-      message: action.reason || `${action.action} on the page`
+      message: action.reason || `${action.action} on the page`,
+      cursor
     };
     activity.push(record);
     onProgress({ state: 'acting', ...record });

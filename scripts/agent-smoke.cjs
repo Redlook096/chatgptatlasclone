@@ -77,10 +77,14 @@ try {
     }
   });
   const pageResult = await page.locator('#result').innerText();
+  const cursorEvents = events.filter((event) => event.state === 'acting' && ['fill', 'click'].includes(event.action));
   if (result.state !== 'complete' || pageResult !== 'done:atlas') {
     throw new Error(`Unexpected agent result: ${JSON.stringify({ result, pageResult })}`);
   }
-  console.log(JSON.stringify({ state: result.state, page_result: pageResult, model_calls: modelCall, progress_events: events.length }));
+  if (cursorEvents.length !== 2 || cursorEvents.some((event) => !Number.isFinite(event.cursor?.x) || !Number.isFinite(event.cursor?.y))) {
+    throw new Error(`Agent target cursor coordinates were missing: ${JSON.stringify(cursorEvents)}`);
+  }
+  console.log(JSON.stringify({ state: result.state, page_result: pageResult, model_calls: modelCall, progress_events: events.length, cursor_targets: cursorEvents.map((event) => event.cursor) }));
 } finally {
   await browser.close().catch(() => {});
   browserProcess.kill();
