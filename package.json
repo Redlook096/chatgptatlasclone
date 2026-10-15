@@ -1,0 +1,56 @@
+{
+  "name": "atlas-desk",
+  "version": "0.1.0",
+  "private": true,
+  "author": "Redlook096",
+  "desktopName": "atlas-desk",
+  "homepage": "https://github.com/Redlook096/chatgpt-atlas-clone",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Redlook096/chatgpt-atlas-clone.git"
+  },
+  "description": "A polished desktop workspace for browsing and working with an AI assistant.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "vite build",
+    "test:agent": "node scripts/agent-smoke.cjs",
+    "test:browser": "node scripts/browser-smoke.cjs",
+    "test:electron": "node scripts/electron-smoke.cjs",
+    "test:fallback": "node scripts/fallback-smoke.cjs",
+    "test:ui": "node scripts/smoke.mjs",
+    "start": "npm run build && electron .",
+    "package:dir": "npm run build && electron-builder --dir",
+    "package:linux": "npm run build && electron-builder --linux AppImage"
+  },
+  "build": {
+    "appId": "com.atlas.desk",
+    "productName": "Atlas Desk",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Network",
+      "syncDesktopName": true
+    }
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "playwright-core": "latest",
+    "vite": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "lucide-react": "latest"
+  },
+  "devDependencies": {
+    "concurrently": "latest",
+    "cross-env": "latest",
+    "electron": "latest",
+    "electron-builder": "latest",
+    "wait-on": "latest"
+  }
+}
