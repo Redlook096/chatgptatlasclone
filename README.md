@@ -4,7 +4,9 @@ Atlas Desk is an Electron reconstruction of the public ChatGPT Atlas experience:
 
 ## Tested interface
 
-![Expanded Atlas welcome screen](./artifacts/screenshots/welcome.png)
+![Atlas welcome screen](./artifacts/screenshots/welcome.png)
+
+![Page-aware Atlas sidebar beside the browser](./artifacts/screenshots/electron-sidebar.png)
 
 ![Agent cursor controlling a browser tab](./artifacts/screenshots/agent-in-use.png)
 
@@ -61,7 +63,7 @@ ATLAS_LLM_BASE_URL=https://api.openai.com/v1
 
 The older `ATLAS_OPENAI_API_KEY` and `ATLAS_OPENAI_MODEL` names are also accepted.
 
-If the key is missing, the provider is offline, or the API reports exhausted credits, Atlas switches automatically to a clearly labeled scripted fallback. Chat can summarize visible page text and produce basic plans, comparisons, and drafts. Agent mode uses Playwright to perform a short deterministic sequence on visible controls, then stops and returns control. Open-ended planning resumes when an LLM is available.
+If the key is missing, the provider is offline, or the API reports exhausted credits, Atlas switches automatically to a clearly labeled scripted fallback. Chat can summarize visible page text and produce basic plans, comparisons, and drafts. Agent mode uses Playwright to perform a short deterministic sequence on visible controls. Each scripted browser action appears in the sidebar with a shimmer for three seconds before it runs, then the sequence stops and returns control. Open-ended planning resumes when an LLM is available.
 
 ## Playwright agent mode
 

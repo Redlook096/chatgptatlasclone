@@ -94,6 +94,9 @@ async function main() {
     await page.locator('.side-chat textarea').fill('Summarize this page');
     await page.locator('.side-chat textarea').press('Enter');
     await page.locator('.side-message.assistant').filter({ hasText: 'scripted mode' }).waitFor({ state: 'visible', timeout: 10000 });
+    const sidebarStyle = await page.locator('.side-message.assistant').evaluate((element) => ({ fontSize: getComputedStyle(element).fontSize, composerBorder: getComputedStyle(document.querySelector('.side-composer')).borderTopWidth }));
+    if (sidebarStyle.fontSize !== '11.5px' || sidebarStyle.composerBorder !== '1px') throw new Error(`Packaged sidebar styling mismatch: ${JSON.stringify(sidebarStyle)}`);
+    await page.screenshot({ path: path.join(projectRoot, 'artifacts', 'screenshots', 'electron-sidebar.png') });
     await page.locator('.side-chat-header button').first().click();
     await page.locator('.side-chat').waitFor({ state: 'detached', timeout: 2000 });
 
@@ -142,6 +145,7 @@ async function main() {
       preserved_webview: true,
       back_forward_reload: true,
       sidebar_page_chat: true,
+      sidebar_atlas_layout: sidebarStyle,
       sidebar_closed: true,
       popup_tab: popupState.title,
       tab_identity: Boolean(firstTabId),

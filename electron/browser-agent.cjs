@@ -1,6 +1,8 @@
 const { chromium } = require('playwright-core');
 const { fallbackReason, scriptedAgentAction } = require('./scripted-fallback.cjs');
 
+const SCRIPTED_ACTION_PREVIEW_MS = 3000;
+
 const MAX_STEPS = 12;
 let browserConnection;
 
@@ -165,6 +167,15 @@ async function performAction(page, action) {
   return { finished: false };
 }
 
+async function previewScriptedAction(page, shouldStop) {
+  const deadline = Date.now() + SCRIPTED_ACTION_PREVIEW_MS;
+  while (Date.now() < deadline) {
+    if (shouldStop()) return false;
+    await page.waitForTimeout(Math.min(100, deadline - Date.now()));
+  }
+  return !shouldStop();
+}
+
 async function runBrowserAgent({ goal, preferredUrl, port, onProgress, shouldStop = () => false }) {
   if (typeof goal !== 'string' || !goal.trim()) throw new Error('Describe what you want the browser to do.');
   const page = await findVisiblePage(port, preferredUrl);
@@ -191,6 +202,7 @@ async function runBrowserAgent({ goal, preferredUrl, port, onProgress, shouldSto
       target: action.target,
       value: action.value,
       scripted: Boolean(action.scripted),
+      preview_ms: action.scripted ? SCRIPTED_ACTION_PREVIEW_MS : 0,
       fallback_reason: action.fallback_reason || '',
       reason: action.reason || '',
       message: action.reason || `${action.action} on the page`,
@@ -198,6 +210,11 @@ async function runBrowserAgent({ goal, preferredUrl, port, onProgress, shouldSto
     };
     activity.push(record);
     onProgress({ state: 'acting', ...record });
+    if (action.scripted && !(await previewScriptedAction(page, shouldStop))) {
+      const stopped = { state: 'stopped', step, message: 'Agent stopped. You have control.', activity, url: page.url() };
+      onProgress(stopped);
+      return stopped;
+    }
     const result = await performAction(page, action);
     if (result.finished) {
       const completed = { state: 'complete', step, message: result.summary, activity, url: page.url(), scripted: usedScriptedFallback };

@@ -10,7 +10,6 @@ import {
   ChevronDown,
   ChevronLeft,
   CircleStop,
-  Clock3,
   Eye,
   EyeOff,
   FileText,
@@ -26,12 +25,12 @@ import {
   PanelLeft,
   Plus,
   RefreshCw,
-  Search,
   Settings,
   ShieldCheck,
   ShoppingBag,
   Sparkles,
   Square,
+  Trash2,
   User,
   WandSparkles,
   X
@@ -93,6 +92,7 @@ function App() {
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentActivity, setAgentActivity] = useState([]);
   const [agentStatus, setAgentStatus] = useState('');
+  const [agentPhase, setAgentPhase] = useState('idle');
   const [siteVisible, setSiteVisible] = useState(true);
   const [loading, setLoading] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -131,12 +131,16 @@ function App() {
     window.atlas?.assistant?.status?.().then(setLlmStatus).catch(() => {});
     const removeProgress = window.atlas?.browser?.onAgentProgress?.((progress) => {
       setAgentStatus(progress.message || '');
+      setAgentPhase(progress.state || 'idle');
       if (progress.cursor) setAgentCursor(progress.cursor);
       if (progress.scripted || progress.fallback_reason) {
         setLlmStatus((current) => ({ ...current, mode: 'scripted', fallbackReason: progress.fallback_reason || current.fallbackReason }));
       }
       if (progress.action || progress.reason) {
         setAgentActivity((current) => [...current, progress].slice(-12));
+      }
+      if (progress.state === 'complete' && progress.message) {
+        setSideMessages((current) => [...current, { id: `agent-complete-${Date.now()}`, role: 'assistant', content: progress.message }]);
       }
       setAgentRunning(!['complete', 'stopped', 'error'].includes(progress.state));
       if (['complete', 'stopped', 'error'].includes(progress.state)) {
@@ -158,6 +162,13 @@ function App() {
   }, []);
 
   useEffect(() => () => window.clearTimeout(sideCloseTimerRef.current), []);
+
+  useEffect(() => {
+    setTabGroups((current) => {
+      const next = current.filter((group) => tabs.some((tab) => tab.groupId === group.id));
+      return next.length === current.length ? current : next;
+    });
+  }, [tabs]);
 
   useEffect(() => {
     function closeMenus(event) {
@@ -322,7 +333,9 @@ function App() {
     if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
     animateState(() => setTabs((current) => {
       const next = [...current];
-      const [moved] = next.splice(sourceIndex, 1);
+      const targetGroupId = next[targetIndex]?.groupId;
+      const [original] = next.splice(sourceIndex, 1);
+      const moved = { ...original, groupId: targetGroupId || undefined };
       next.splice(targetIndex, 0, moved);
       return next;
     }));
@@ -361,7 +374,20 @@ function App() {
   }
 
   function setTabGroup(tabId, groupId) {
-    animateState(() => setTabs((current) => current.map((tab) => tab.id === tabId ? { ...tab, groupId } : tab)));
+    animateState(() => setTabs((current) => {
+      const sourceIndex = current.findIndex((tab) => tab.id === tabId);
+      if (sourceIndex < 0) return current;
+      const next = [...current];
+      const [source] = next.splice(sourceIndex, 1);
+      const moved = { ...source, groupId };
+      if (!groupId) {
+        next.splice(sourceIndex, 0, moved);
+        return next;
+      }
+      const lastGroupIndex = next.reduce((last, tab, index) => tab.groupId === groupId ? index : last, -1);
+      next.splice(lastGroupIndex + 1, 0, moved);
+      return next;
+    }));
     setTabMenu(null);
   }
 
@@ -393,7 +419,7 @@ function App() {
     openUrl(`https://www.google.com/search?q=${encodeURIComponent(clean)}`, `${clean} - Google Search`);
   }
 
-  async function submitUniversal(value = homeQuery) {
+  async function submitUniversal(value = homeQuery, forceAgent = false) {
     const clean = value.trim();
     if (!clean) return;
     const url = normaliseUrl(clean);
@@ -402,13 +428,14 @@ function App() {
       openUrl(url);
       return;
     }
-    if (agentMode) {
+    if (agentMode || forceAgent) {
       const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(clean)}`;
       openUrl(searchUrl, 'Agent task');
       openSideChat();
       setAgentRunning(true);
       setAgentActivity([]);
       setAgentStatus('Opening the web…');
+      setAgentPhase('connecting');
       window.setTimeout(() => runAgent(clean, searchUrl), 1400);
       return;
     }
@@ -462,7 +489,7 @@ function App() {
     setSideMessages((current) => [...current, user, waiting]);
     let pageContext = '';
     const view = activeWebview();
-    if (siteVisible && view) {
+    if (siteVisible && typeof view?.executeJavaScript === 'function') {
       pageContext = await view.executeJavaScript(
         `({title: document.title, url: location.href, text: document.body.innerText.slice(0, 14000)})`,
         true
@@ -474,12 +501,20 @@ function App() {
 
   async function runAgent(goal, preferredUrl = activeTab.url) {
     if (!goal.trim()) return;
+    const task = goal.trim();
     setAgentMode(true);
     openSideChat();
+    setSideInput('');
+    setSideMessages((current) => [
+      ...current,
+      { id: `agent-user-${Date.now()}`, role: 'user', content: task },
+      { id: `agent-intro-${Date.now()}`, role: 'assistant', content: 'I’ll work through this in the current tab. You can take control at any time.' }
+    ]);
     setAgentRunning(true);
     setAgentCursor({ x: 80, y: 90 });
     setAgentStatus('Connecting Playwright to this tab…');
-    await window.atlas?.browser?.runAgentTask?.({ goal: goal.trim(), preferredUrl });
+    setAgentPhase('connecting');
+    await window.atlas?.browser?.runAgentTask?.({ goal: task, preferredUrl });
   }
 
   function stopAgent() {
@@ -487,6 +522,7 @@ function App() {
     setAgentRunning(false);
     setAgentCursor(null);
     setAgentStatus('You have control.');
+    setAgentPhase('stopped');
   }
 
   async function submitSelection() {
@@ -582,9 +618,6 @@ function App() {
               onQueryChange={setHomeQuery}
               onSubmit={submitUniversal}
               onToggleAgent={() => setAgentMode((value) => !value)}
-              memory={memory}
-              onBrowse={() => searchGoogle('Discover something new')}
-              onHistory={() => setMemoryOpen(true)}
             /></div>
           )}
           {activeTab.kind === 'chat' && <div className="page-view page-view-active"><FullChatPage tab={activeTab} input={chatInput} onInputChange={setChatInput} onSend={continueChat} /></div>}
@@ -629,11 +662,19 @@ function App() {
             agentRunning={agentRunning}
             agentActivity={agentActivity}
             agentStatus={agentStatus}
+            agentPhase={agentPhase}
             onClose={closeSideChat}
             onInputChange={setSideInput}
             onSend={() => agentMode ? runAgent(sideInput) : sendSideMessage()}
             onToggleAgent={() => setAgentMode((value) => !value)}
             onStopAgent={stopAgent}
+            onClear={() => {
+              setSideMessages([]);
+              setAgentActivity([]);
+              setAgentStatus('');
+              setAgentPhase('idle');
+              setSideInput('');
+            }}
           />
         )}
       </main>
@@ -645,7 +686,7 @@ function App() {
   );
 }
 
-function NewTabPage({ query, agentMode, inputRef, onQueryChange, onSubmit, onToggleAgent, memory, onBrowse, onHistory }) {
+function NewTabPage({ query, agentMode, inputRef, onQueryChange, onSubmit, onToggleAgent }) {
   return (
     <section className="new-tab-page">
       <button className="model-selector">ChatGPT 5 <ChevronDown size={15} /></button>
@@ -654,24 +695,16 @@ function NewTabPage({ query, agentMode, inputRef, onQueryChange, onSubmit, onTog
         <form className="universal-box" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
           <button type="button" className="universal-plus"><Plus size={20} /></button>
           <input ref={inputRef} value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Ask ChatGPT or type URL" />
-          <button type="button" className={`agent-toggle ${agentMode ? 'active' : ''}`} onClick={onToggleAgent}><WandSparkles size={15} /> Agent</button>
           <button className="universal-mic" type="button"><Mic size={18} /></button>
           <button className="universal-go" type="submit"><ArrowUp size={17} /></button>
         </form>
         <div className="home-suggestions">
           {homeSuggestions.map((suggestion) => (
-            <button key={suggestion.label} onClick={() => { if (suggestion.agent && !agentMode) onToggleAgent(); onSubmit(suggestion.detail); }}>
+            <button key={suggestion.label} onClick={() => { if (suggestion.agent && !agentMode) onToggleAgent(); onSubmit(suggestion.detail, suggestion.agent); }}>
               <span>{suggestion.icon}</span><strong className={suggestion.agent ? 'agent-label' : ''}>{suggestion.label}</strong><em>—</em><small>{suggestion.detail}</small>
             </button>
           ))}
         </div>
-        <div className="welcome-divider"><span>Explore Atlas</span></div>
-        <div className="welcome-cards">
-          <button onClick={onBrowse}><span><Search size={16} /></span><strong>Browse with Google</strong><small>Search the live web in a full browser tab</small></button>
-          <button onClick={() => { if (!agentMode) onToggleAgent(); inputRef.current?.focus(); }}><span className="blue"><MousePointer2 size={16} /></span><strong>Let Agent take action</strong><small>Use Playwright to complete a task on the page</small></button>
-          <button onClick={onHistory}><span><Clock3 size={16} /></span><strong>Continue browsing</strong><small>{memory.length ? `${memory.length} saved page${memory.length === 1 ? '' : 's'} in history` : 'Your visited pages will appear here'}</small></button>
-        </div>
-        <div className="welcome-shortcuts"><span><kbd>Ctrl</kbd><kbd>L</kbd> Address</span><span><kbd>Ctrl</kbd><kbd>K</kbd> Ask ChatGPT</span><span><kbd>Ctrl</kbd><kbd>T</kbd> New tab</span></div>
       </div>
     </section>
   );
@@ -699,14 +732,40 @@ function FullChatPage({ tab, input, onInputChange, onSend }) {
   );
 }
 
-function SideChat({ closing, messages, input, inputRef, activeTab, agentMode, agentRunning, agentActivity, agentStatus, onClose, onInputChange, onSend, onToggleAgent, onStopAgent }) {
+const agentActionLabels = {
+  back: 'Going back',
+  click: 'Clicking',
+  fill: 'Typing',
+  finish: 'Finishing',
+  goto: 'Opening a page',
+  press: 'Pressing a key',
+  wait: 'Waiting'
+};
+
+function SideChat({ closing, messages, input, inputRef, activeTab, agentMode, agentRunning, agentActivity, agentStatus, agentPhase, onClose, onInputChange, onSend, onToggleAgent, onStopAgent, onClear }) {
+  const source = activeTab.kind === 'web' ? shortHost(activeTab.url) : 'Current tab';
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const fileInputRef = useRef(null);
+  const recentActivity = agentActivity.slice(-4);
+  const handleComposerKey = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !agentRunning) {
+      event.preventDefault();
+      onSend();
+    }
+  };
   return (
     <aside className={`side-chat ${closing ? 'closing' : ''}`}>
-      <div className="side-chat-header"><button onClick={onClose}><ChevronLeft size={17} /></button><span>ChatGPT</span><button><Menu size={18} /></button></div>
+      <div className="side-chat-header"><button aria-label="Close sidebar" onClick={onClose}><ChevronLeft size={17} /></button><span /><button aria-label="Chat menu" onClick={() => { setChatMenuOpen((value) => !value); setToolsOpen(false); }}><Menu size={18} /></button></div>
+      {chatMenuOpen && <div className="side-chat-menu">
+        <button onClick={() => { onClear(); setChatMenuOpen(false); inputRef.current?.focus(); }}><Plus size={15} /> New chat</button>
+        <button onClick={() => { onClear(); setChatMenuOpen(false); }}><Trash2 size={15} /> Clear conversation</button>
+        <button onClick={onClose}><ChevronLeft size={15} /> Close sidebar</button>
+      </div>}
       <div className="side-chat-scroll">
-        <div className="source-pill"><Globe2 size={13} /> {activeTab.kind === 'web' ? shortHost(activeTab.url) : 'Current tab'}</div>
+        <div className="side-source-row"><div className="source-pill"><span className="site-favicon">{source.charAt(0).toUpperCase()}</span>{source}</div></div>
         {messages.length === 0 && !agentRunning && (
-          <div className="side-empty"><Aperture size={31} /><h2>Ask about this page</h2><p>Summarize, explain, compare, or turn on agent mode to take action.</p></div>
+          <div className="side-empty"><Aperture size={28} /><h2>Ask anything about this page</h2><p>Get a summary, explain a section, compare information, or ask ChatGPT to take action.</p></div>
         )}
         {messages.map((message) => (
           <div key={message.id} className={`side-message ${message.role}`}>
@@ -715,23 +774,59 @@ function SideChat({ closing, messages, input, inputRef, activeTab, agentMode, ag
         ))}
         {(agentRunning || agentActivity.length > 0) && (
           <div className="agent-activity">
-            <div className="agent-activity-title"><Globe2 size={14} /><span>{agentStatus || 'Agent activity'}</span></div>
-            {agentActivity.map((item, index) => <div key={`${item.step}-${index}`} className="agent-step"><span>{item.step}</span><p>{item.message || item.reason}</p></div>)}
-            {agentRunning && <button className="take-control" onClick={onStopAgent}>Take control</button>}
+            <div className="agent-activity-title"><Globe2 size={13} /><span>{agentStatus || 'Working on this page'}</span><ChevronDown size={13} /></div>
+            {recentActivity.map((item, index) => {
+              const current = agentPhase === 'acting' && index === recentActivity.length - 1;
+              return <div key={`${item.step}-${index}`} className={`agent-step ${current ? 'current' : 'complete'}`} data-preview-ms={item.preview_ms || 0}>
+                <span />
+                <div><strong>{agentActionLabels[item.action] || 'Working'}</strong><p>{item.message || item.reason}</p></div>
+              </div>;
+            })}
           </div>
         )}
       </div>
       <div className="side-composer">
-        <div className="source-chip"><Globe2 size={12} /> {activeTab.kind === 'web' ? shortHost(activeTab.url) : 'ChatGPT'}</div>
-        <textarea ref={inputRef} value={input} onChange={(event) => onInputChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); onSend(); } }} placeholder={agentMode ? 'Describe a task' : 'Ask ChatGPT'} />
-        <div className="side-composer-actions"><button><Plus size={19} /></button><button className={agentMode ? 'active-agent' : ''} onClick={onToggleAgent}><WandSparkles size={15} /> Agent</button><button><Globe2 size={15} /> Sources <ChevronDown size={13} /></button><button className="side-send" onClick={onSend}>{agentRunning ? <Square size={13} fill="currentColor" /> : <ArrowUp size={17} />}</button></div>
+        {toolsOpen && <div className="side-tools-menu">
+          <button onClick={() => { onToggleAgent(); setToolsOpen(false); }}><WandSparkles size={15} /> Agent mode</button>
+          <button onClick={() => { onInputChange(input || 'Search the web for '); setToolsOpen(false); window.setTimeout(() => inputRef.current?.focus(), 0); }}><Globe2 size={15} /> Search sources</button>
+          <button onClick={() => { fileInputRef.current?.click(); setToolsOpen(false); }}><Plus size={15} /> Attach a file</button>
+        </div>}
+        <input ref={fileInputRef} className="side-file-input" type="file" onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onInputChange(`${input}${input ? '\n' : ''}Attached: ${file.name}`);
+          event.target.value = '';
+        }} />
+        <div className="source-chip"><span className="site-favicon">{source.charAt(0).toUpperCase()}</span>{source}</div>
+        {!agentMode ? <div className="side-followup-row">
+          <button aria-label="Chat tools" onClick={() => { setToolsOpen((value) => !value); setChatMenuOpen(false); }}><Plus size={19} /></button>
+          <textarea ref={inputRef} value={input} onChange={(event) => onInputChange(event.target.value)} onKeyDown={handleComposerKey} placeholder={messages.length ? 'Follow up…' : 'Ask about this page'} />
+          <button aria-label="Voice"><Mic size={15} /></button>
+          <button aria-label="Send" className="side-send" onClick={onSend}><ArrowUp size={17} /></button>
+        </div> : <>
+          <textarea ref={inputRef} value={input} onChange={(event) => onInputChange(event.target.value)} onKeyDown={handleComposerKey} placeholder="Describe a task" />
+          <div className="side-composer-actions"><button aria-label="Chat tools" onClick={() => { setToolsOpen((value) => !value); setChatMenuOpen(false); }}><Plus size={19} /></button><button className="active-agent" onClick={onToggleAgent}><WandSparkles size={15} /> Agent</button><button onClick={() => { onInputChange(input || 'Search the web for '); inputRef.current?.focus(); }}><Globe2 size={15} /> Sources <ChevronDown size={13} /></button><button aria-label={agentRunning ? 'Stop agent' : 'Send'} className="side-send" onClick={agentRunning ? onStopAgent : onSend}>{agentRunning ? <Square size={12} fill="currentColor" /> : <ArrowUp size={17} />}</button></div>
+        </>}
       </div>
     </aside>
   );
 }
 
 function FormattedText({ text }) {
-  return String(text || '').split('\n').map((line, index) => line ? <p key={index}>{line}</p> : <div key={index} className="text-gap" />);
+  return String(text || '').split('\n').map((line, index) => {
+    const clean = line.trim();
+    if (!clean) return <div key={index} className="text-gap" />;
+    if (/^(?:[-*•]|\d+[.)])\s+/.test(clean)) {
+      return <div key={index} className="formatted-bullet"><span>•</span><p><InlineText text={clean.replace(/^(?:[-*•]|\d+[.)])\s+/, '')} /></p></div>;
+    }
+    if (/^#{1,3}\s+/.test(clean) || /^\*\*[^*]+\*\*$/.test(clean)) {
+      return <h3 key={index}><InlineText text={clean.replace(/^#{1,3}\s+/, '')} /></h3>;
+    }
+    return <p key={index}><InlineText text={clean} /></p>;
+  });
+}
+
+function InlineText({ text }) {
+  return String(text).split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((part, index) => part.startsWith('**') && part.endsWith('**') ? <strong key={index}>{part.slice(2, -2)}</strong> : part);
 }
 
 function MemoryDialog({ memory, onClose, onOpen, onClear }) {

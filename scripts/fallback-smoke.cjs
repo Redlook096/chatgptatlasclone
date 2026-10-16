@@ -67,24 +67,33 @@ async function main() {
       const page = await browser.newPage();
       await page.goto('http://127.0.0.1:4312', { waitUntil: 'domcontentloaded' });
       const events = [];
+      const startedAt = Date.now();
       const result = await runBrowserAgent({
         goal: 'Enter atlas and run the task.',
         preferredUrl: 'http://127.0.0.1:4312/',
         port: 9335,
         onProgress: (event) => events.push(event)
       });
+      const elapsedMs = Date.now() - startedAt;
       const pageResult = await page.locator('#result').innerText();
       if (result.state !== 'complete' || !result.scripted || pageResult !== 'done:atlas') {
         throw new Error(`Unexpected scripted agent result: ${JSON.stringify({ result, pageResult })}`);
       }
       if (!events.some((event) => event.scripted)) throw new Error('Fallback progress was not marked as scripted.');
+      const actingEvents = events.filter((event) => event.state === 'acting');
+      if (actingEvents.length !== 3 || actingEvents.some((event) => event.preview_ms !== 3000)) {
+        throw new Error(`Scripted actions were not exposed as three-second previews: ${JSON.stringify(actingEvents)}`);
+      }
+      if (elapsedMs < 9000) throw new Error(`Scripted actions completed before their previews were shown: ${elapsedMs}ms`);
       console.log(JSON.stringify({
         assistant_mode: assistant.mode,
         assistant_reason: assistant.reason,
         agent_state: result.state,
         agent_scripted: result.scripted,
         page_result: pageResult,
-        steps: result.step
+        steps: result.step,
+        action_previews: actingEvents.map((event) => `${event.action}:${event.preview_ms}`),
+        elapsed_ms: elapsedMs
       }));
     } finally {
       await browser.close().catch(() => {});
